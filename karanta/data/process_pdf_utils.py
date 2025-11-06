@@ -67,7 +67,7 @@ def render_pdf_to_base64png(
             ),  # 72 pixels per point is the conversion factor
             local_pdf_path,
         ],
-        timeout=120,
+        timeout=20,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

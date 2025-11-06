@@ -15,13 +15,13 @@ fi
 
 # ---- CONFIGURATION ----
 export NUM_MACHINES=1
-export NUM_PROCESSES=4
+export NUM_PROCESSES=8
 export MAIN_PORT=29501
 export MIXED_PRECISION=bf16
 export CONFIG_PATH=$2
 
 # ---- OPTIONAL ENV VARS ----
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export TOKENIZERS_PARALLELISM=false
 export TRANSFORMERS_OFFLINE=false
 export HF_HOME="$HOME/.cache/huggingface"

@@ -138,7 +138,7 @@ class ExperimentArguments:
         },
     )
     warmup_ratio: float = field(
-        default=0.03,
+        default=0.1,
         metadata={"help": "Linear warmup over warmup_ratio fraction of total steps."},
     )
     weight_decay: float = field(
@@ -146,7 +146,7 @@ class ExperimentArguments:
         metadata={"help": "Weight decay for AdamW if we apply some."},
     )
     learning_rate: float = field(
-        default=5e-5,
+        default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
     overwrite_output_dir: bool = field(default=False)
