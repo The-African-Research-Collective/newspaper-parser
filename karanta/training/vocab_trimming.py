@@ -28,7 +28,7 @@ def pretty(num: int) -> str:
     return "{:,}".format(int(num))
 
 
-def load_model(model_path: str, device_map: str = "auto", dtype: str = "auto"):
+def load_model(model_path: str, device_map: str = "auto", dtype: str = "bf16"):
     logger.info(f"Loading model from {model_path} ...")
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_path,
@@ -104,7 +104,7 @@ def build_train_dataset(dataset_config_path: str):
     return train_dataset
 
 
-def mine_token_frequencies_option_b(
+def mine_token_frequencies(
     train_dataset,
     vocab_size: int,
     batch_size: int = 64,
@@ -112,12 +112,7 @@ def mine_token_frequencies_option_b(
     ignore_index: int = -100,
 ):
     """
-    Option B: iterate over dataset with a DataLoader and accumulate token counts via torch.bincount.
-
-    Assumptions:
-      - train_dataset has a 'labels' column containing token ids.
-      - labels may be lists/arrays/tensors, variable-length.
-      - ignore_index (default -100) is excluded if present.
+    Iterate over dataset with a DataLoader and accumulate token counts via torch.bincount.
 
     Returns:
       counts: torch.IntTensor [vocab_size] with frequencies.
@@ -150,6 +145,7 @@ def mine_token_frequencies_option_b(
             lab = ex["labels"]
             input_ids = ex["input_ids"]
             if isinstance(lab, torch.Tensor):
+                # combine all the input ids and labels into one tensor
                 t = torch.cat(
                     (
                         lab.reshape(-1).to(dtype=torch.long),
@@ -166,6 +162,7 @@ def mine_token_frequencies_option_b(
                 )
             flat.append(t)
 
+        # combine all the input ids and labels for all the examples in the batch
         labels = torch.cat(flat, dim=0)
 
         if ignore_index is not None:
@@ -188,6 +185,7 @@ def save_frequency_json(counts: torch.Tensor, out_path: str):
     """
     freq = {str(i): int(c) for i, c in enumerate(counts.tolist()) if c > 0}
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
     with open(out_path, "w") as f:
         json.dump(freq, f)
     logger.info(
@@ -202,11 +200,11 @@ def load_frequency_json(path: str) -> dict:
 
 def _get_backend_model_state(tokenizer):
     """
-    Returns (model_state_dict, model_type_str, vocab_as_list_of_pairs, merges_list_or_none, extra_fields_dict)
+    Returns (model_type_str, vocab_as_list_of_pairs, merges_list_or_none, extra_fields_dict)
     for tokenizers backend models.
     """
     state = json.loads(tokenizer.backend_tokenizer.model.__getstate__())
-    model_type = state.get("type", None)
+    model_type = state.get("type", None)  # tokenizer type
     if model_type is None:
         raise ValueError(
             f"Tokenizer backend model state missing 'type': keys={list(state.keys())}"
@@ -302,7 +300,6 @@ def trim_tokenizer_backend_model(
     }
 
     # Build token -> old_id from current tokenizer vocab
-    # (HF fast tokenizers expose get_vocab() => token -> id)
     token_to_oldid = tokenizer.get_vocab()
 
     # Kept tokens are those whose old id is in old_to_new
@@ -314,10 +311,6 @@ def trim_tokenizer_backend_model(
 
     # --- Rebuild backend model state
     model_type, vocab_pairs, merges, extra = _get_backend_model_state(tokenizer)
-
-    print(type(vocab_pairs))
-    print(model_type)
-    print(type(merges))
 
     # Keep only entries in vocab that are kept, and rewrite ids to new contiguous ids
     # vocab_pairs is list[(token, old_id)] or list[(token, score)] for some models;
@@ -355,9 +348,6 @@ def trim_tokenizer_backend_model(
     new_vocab_tokens = {tok for tok, _ in new_vocab}
     new_merges = _filter_merges_for_vocab(merges, new_vocab_tokens)
 
-    print([(a, b) for a, b in new_merges if a == "rray" or b == "rray"])
-    print("rray" in new_vocab_tokens)
-
     # Recreate the model class with the new vocab/merges
     model_class = getattr(models, model_type)
     model_kwargs = dict(extra)
@@ -367,7 +357,6 @@ def trim_tokenizer_backend_model(
 
     tokenizer.backend_tokenizer.model = model_class(**model_kwargs)
 
-    # Update common HF metadata (best-effort)
     try:
         tokenizer.model_max_length = getattr(
             tokenizer, "model_max_length", tokenizer.model_max_length
@@ -432,6 +421,12 @@ def main():
         default="auto",
         help="HF device_map for loading the model",
     )
+    parser.add_argument(
+        "--output_directory",
+        type=str,
+        required=True,
+        help="Output directory to store output model and tokenizer artefacts",
+    )
     args = parser.parse_args()
 
     model = load_model(
@@ -454,12 +449,12 @@ def main():
     os.makedirs(os.path.dirname(cache_file_frequency), exist_ok=True)
     os.makedirs(os.path.dirname(cache_file_vocab), exist_ok=True)
 
-    # Mine or load frequencies
+    # Mine or load frequencies of each token in the dataset
     if not os.path.exists(cache_file_frequency):
         logger.info(
             f"Frequency cache not found. Mining and caching to: {cache_file_frequency}"
         )
-        counts = mine_token_frequencies_option_b(
+        counts = mine_token_frequencies(
             train_dataset=train_dataset,
             vocab_size=vocab_size,
             batch_size=args.batch_size,
@@ -479,8 +474,8 @@ def main():
     # Sort by descending frequency
     kept.sort(key=lambda x: x[1], reverse=True)
 
-    # Optional: truncate to target_vocab_size
     if args.target_vocab_size is not None and args.target_vocab_size > 0:
+        print(f"Truncating vocabulary to size: {args.target_vocab_size}")
         kept = kept[: args.target_vocab_size]
 
     vocab_list = [
@@ -511,6 +506,7 @@ def main():
         zip(processor.tokenizer.all_special_tokens, processor.tokenizer.all_special_ids)
     )
 
+    # keep all the merges or tokens with the newline Ċ token
     vocab = {
         k: v for k, v in processor.tokenizer.get_vocab().items() if "Ċ" in k
     } | vocab
@@ -535,68 +531,34 @@ def main():
 
     model.resize_token_embeddings(model.config.vocab_size)
 
+    print("Parameter Statistics of the Model before Optimization:")
     _, _, vocab_size = show_parameter(model)
 
     # ---------------------------------------------------------------------
     # Trim tokenizer backend model to match pruned embeddings (contiguous ids)
     # ---------------------------------------------------------------------
-    out_dir = "/home/oogundep/model/karanta_pruned_vocab"
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(args.output_directory, exist_ok=True)
 
     print("updating tokenizer ...")
 
     # IMPORTANT: kept ids in the exact order of embedding rows
-    # You already made embedding rows as inp_embeddings.weight[new_vocab_id]
-    kept_old_ids_in_embedding_order = (
-        new_vocab_id  # list[int], sorted by old id in your code
-    )
+    # list[int], sorted by old id
+    kept_old_ids_in_embedding_order = new_vocab_id
 
     processor.tokenizer, old_to_new, token_to_newid = trim_tokenizer_backend_model(
         processor.tokenizer,
         kept_old_ids_in_embedding_order=kept_old_ids_in_embedding_order,
-        out_dir=out_dir,
+        out_dir=args.output_directory,
     )
-
-    # Optional sanity checks
-    # new_vocab_size = len(kept_old_ids_in_embedding_order)
-    # assert processor.tokenizer.vocab_size == new_vocab_size or len(processor.tokenizer.get_vocab()) == new_vocab_size, \
-    #     f"Tokenizer vocab mismatch: expected {new_vocab_size}, got {processor.tokenizer.vocab_size}"
-
-    # If you keep special tokens, make sure they're still configured
-    # (Usually they are, since they remain in get_vocab and special token fields are separate)
-    processor.tokenizer.special_tokens_map  # triggers internal consistency checks in some tokenizers
 
     # Save
-    processor.save_pretrained(out_dir)
-    model.save_pretrained(out_dir)
+    processor.save_pretrained(args.output_directory)
+    model.save_pretrained(args.output_directory)
 
-    print(f"Saved pruned model + processor to: {out_dir}")
+    print(f"Saved pruned model + processor to: {args.output_directory}")
     print(
-        f"Saved old->new id map to: {os.path.join(out_dir, 'old_to_new_token_id.json')}"
+        f"Saved old->new id map to: {os.path.join(args.output_directory, 'old_to_new_token_id.json')}"
     )
-
-    # print("updating tokenizer ...")
-    # model_state = json.loads(processor.tokenizer.backend_tokenizer.model.__getstate__())
-
-    # is_dict = False
-    # if type(model_state['vocab']) is dict:
-    #     is_dict = True
-    #     model_state['vocab'] = list(model_state['vocab'].items())
-
-    # new_state = []
-    # for i, (w, s) in tqdm(enumerate(model_state['vocab'])):
-    #     if w in new_vocab:
-    #         new_state.append((w, s))
-
-    # if is_dict:
-    #     new_state = dict(new_state)
-
-    # model_state['vocab'] = new_state
-    # model_class = getattr(models, model_state.pop("type"))
-    # processor.tokenizer.backend_tokenizer.model = model_class(**model_state)
-
-    # processor.save_pretrained("/home/oogundep/model/karanta_pruned_vocab")
-    # model.save_pretrained("/home/oogundep/model/karanta_pruned_vocab")
 
 
 if __name__ == "__main__":
