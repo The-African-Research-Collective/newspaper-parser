@@ -7,7 +7,6 @@ from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
 
 from karanta.data.process_pdf_utils import render_pdf_to_base64png
-from karanta.prompts.anchor import get_anchor_text
 
 from karanta.constants import TARGET_IMAGE_DIM
 
@@ -46,11 +45,9 @@ def build_message(image_url: str, system_prompt: str, page: int = 0):
     """Format messages in Qwen VL chat format, injecting system prompt and base text."""
 
     image_base64 = render_pdf_to_base64png(image_url, page, TARGET_IMAGE_DIM)
-    anchor_text = get_anchor_text(image_url, page, pdf_engine="pdfreport")
-
     prompt_template_dict = Template(system_prompt)
 
-    print(f"Prompt: {prompt_template_dict.render({'base_text': anchor_text})}\n=======")
+    print(f"Prompt: {prompt_template_dict.render()}\n=======")
 
     prompt = [
         [
@@ -59,7 +56,7 @@ def build_message(image_url: str, system_prompt: str, page: int = 0):
                 "content": [
                     {
                         "type": "text",
-                        "text": prompt_template_dict.render({"base_text": anchor_text}),
+                        "text": prompt_template_dict.render(),
                     },
                     {
                         "type": "image",
