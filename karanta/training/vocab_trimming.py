@@ -115,7 +115,7 @@ def mine_token_frequencies(
     Iterate over dataset with a DataLoader and accumulate token counts via torch.bincount.
 
     Returns:
-      counts: torch.IntTensor [vocab_size] with frequencies.
+      counts: torch.LongTensor [vocab_size] with frequencies.
     """
     # Avoid Arrow serialization issues by NOT using dataset.map for reductions.
     # Using HF's torch formatting helps when possible, but we still robustly handle lists.
@@ -357,13 +357,6 @@ def trim_tokenizer_backend_model(
 
     tokenizer.backend_tokenizer.model = model_class(**model_kwargs)
 
-    try:
-        tokenizer.model_max_length = getattr(
-            tokenizer, "model_max_length", tokenizer.model_max_length
-        )
-    except Exception:
-        pass
-
     # Save id mapping for debugging
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "old_to_new_token_id.json"), "w") as f:
@@ -374,7 +367,7 @@ def trim_tokenizer_backend_model(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Mine token frequencies (Option B: DataLoader + bincount)"
+        description="Trim model vocabulary by removing infrequent tokens based on dataset analysis"
     )
     parser.add_argument(
         "--model_path_or_name",
@@ -425,7 +418,7 @@ def main():
         "--output_directory",
         type=str,
         required=True,
-        help="Output directory to store output model and tokenizer artefacts",
+        help="Output directory to store output model and tokenizer artifacts",
     )
     args = parser.parse_args()
 
@@ -506,7 +499,11 @@ def main():
         zip(processor.tokenizer.all_special_tokens, processor.tokenizer.all_special_ids)
     )
 
-    # keep all the merges or tokens with the newline Ċ token
+    # NOTE: Always keep tokens that contain the "Ċ" marker, which represents newlines
+    # in this tokenizer/BPE scheme. Dropping these tokens based purely on frequency
+    # can corrupt text structure (lost line breaks) and break learned merge patterns
+    # that depend on newline-aware tokens. If you need to change this behavior or
+    # make it configurable, adjust this filter rather than the frequency logic above.
     vocab = {
         k: v for k, v in processor.tokenizer.get_vocab().items() if "Ċ" in k
     } | vocab
@@ -531,7 +528,7 @@ def main():
 
     model.resize_token_embeddings(model.config.vocab_size)
 
-    print("Parameter Statistics of the Model before Optimization:")
+    print("Parameter Statistics of the Model after Optimization:")
     _, _, vocab_size = show_parameter(model)
 
     # ---------------------------------------------------------------------
@@ -541,11 +538,11 @@ def main():
 
     print("updating tokenizer ...")
 
-    # IMPORTANT: kept ids in the exact order of embedding rows
-    # list[int], sorted by old id
+    # IMPORTANT: kept old token ids sorted in ascending order.
+    # list[int] of old token ids used to index into the original embedding rows.
     kept_old_ids_in_embedding_order = new_vocab_id
 
-    processor.tokenizer, old_to_new, token_to_newid = trim_tokenizer_backend_model(
+    processor.tokenizer, _, _ = trim_tokenizer_backend_model(
         processor.tokenizer,
         kept_old_ids_in_embedding_order=kept_old_ids_in_embedding_order,
         out_dir=args.output_directory,
