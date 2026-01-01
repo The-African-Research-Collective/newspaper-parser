@@ -184,7 +184,9 @@ def save_frequency_json(counts: torch.Tensor, out_path: str):
     Only stores nonzero counts to keep file small.
     """
     freq = {str(i): int(c) for i, c in enumerate(counts.tolist()) if c > 0}
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    dir_name = os.path.dirname(out_path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
 
     with open(out_path, "w") as f:
         json.dump(freq, f)
