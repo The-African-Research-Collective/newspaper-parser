@@ -285,10 +285,10 @@ class DataCollator:
 
 if __name__ == "__main__":
     all_config = load_yaml_config(
-        "configs/training/ocr/karanta_set_qwen_2_5_3B_vl_all_linear_no_base_text.yaml"
+        "/home/oogundep/karanta-ocr/configs/training/ocr/karanta_set_qwen_2_5_3B_vl_all_linear_no_base_text.yaml"
     )
     # print(all_config)
-    config = all_config["dataset_train"][2]
+    config = all_config["dataset_train"][0]
     pipeline = config["pipeline"]
 
     print(pipeline)
@@ -332,19 +332,27 @@ if __name__ == "__main__":
 
     # print(f"Dataset length: {len(dataset)}")
 
-    # dataloader = DataLoader(
-    #     ts,
-    #     batch_size=0,
-    #     collate_fn=DataCollator(
-    #         "Qwen/Qwen2.5-VL-3B-Instruct", max_token_len=all_config["max_length"]
-    #     ),
-    #     num_workers=4,
-    # )
-    # from tqdm import tqdm
+    from tqdm import tqdm
+    from torch.utils.data import DataLoader
 
-    # for b in tqdm(dataloader):
-    #     print(b.keys())
-    #     break
+    dataloader = DataLoader(
+        ts,
+        batch_size=8,
+        collate_fn=DataCollator(
+            "Qwen/Qwen2.5-VL-3B-Instruct", max_token_len=all_config["max_length"]
+        ),
+        num_workers=8,
+    )
+
+    total_input_tokens = 0
+    total_label_tokens = 0
+
+    for b in tqdm(dataloader):
+        total_input_tokens += b["input_ids"].numel()
+        total_label_tokens += torch.sum(b["labels"] != -100).item()
+
+    print(f"Total input tokens: {total_input_tokens}")
+    print(f"Total label tokens: {total_label_tokens}")
 
     # print(next(iter(dataloader))['input_ids'].shape)
 

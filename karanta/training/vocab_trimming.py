@@ -551,8 +551,8 @@ def main():
     )
 
     # Save
-    processor.save_pretrained(args.output_directory)
-    model.save_pretrained(args.output_directory)
+    # processor.save_pretrained(args.output_directory)
+    # model.save_pretrained(args.output_directory)
 
     print(f"Saved pruned model + processor to: {args.output_directory}")
     print(
