@@ -2,12 +2,15 @@ import torch
 import numpy as np
 import json
 import hashlib
+
+from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Optional
 from datasets import Dataset, load_from_disk
 from concurrent.futures import ThreadPoolExecutor
 from transformers import AutoProcessor
 from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import DataLoader
 
 from karanta.training.utils import load_yaml_config, SingleDatapoint
 from karanta.training.pipeline_steps import (
@@ -285,13 +288,11 @@ class DataCollator:
 
 if __name__ == "__main__":
     all_config = load_yaml_config(
-        "/home/oogundep/karanta-ocr/configs/training/ocr/karanta_set_qwen_2_5_3B_vl_all_linear_no_base_text.yaml"
+        "configs/training/ocr/karanta_set_qwen_2_5_3B_vl_all_linear_no_base_text.yaml"
     )
-    # print(all_config)
     config = all_config["dataset_train"][0]
     pipeline = config["pipeline"]
 
-    print(pipeline)
     dataset = LocalDataset(
         root_dir=Path(config["root_dir"]),
         pdf_dir_name=config["pdf_dir_name"],
@@ -301,42 +302,8 @@ if __name__ == "__main__":
         pipeline_steps=pipeline,
     )
 
-    # ts = concatenate_datasets([dataset.dataset, dataset.dataset])
-    ts = dataset.dataset
-
-    print(dataset)
-    print(dataset[0].keys())
-    print(len(ts))
-    # print(dataset[0]['input_ids'].shape)
-
-    # from transformers import AutoProcessor
-
-    # # torch.set_printoptions(threshold=10_000)
-    # # numpy.set_printoptions(threshold=10_000)
-
-    # processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-3B-Instruct")
-    # print(processor.tokenizer.padding_side)
-
-    # print(
-    #     processor(text = ["I am the prince of wales"], return_tensors="np",padding="max_length", max_length=200, )
-    # )
-    # for i in range(len(dataset)):
-    #     print(dataset[i]['input_ids'])
-    #     print(dataset[i]['input_ids'].shape)
-    # print(processor.tokenizer.pad_token_id)
-    # print(processor.tokenizer.padding_side)
-
-    # print(processor.tokenizer.decode(dataset[0]['input_ids']))
-
-    # print(processor.tokenizer.pad_token_id in dataset[0]['input_ids'])
-
-    # print(f"Dataset length: {len(dataset)}")
-
-    from tqdm import tqdm
-    from torch.utils.data import DataLoader
-
     dataloader = DataLoader(
-        ts,
+        dataset.dataset,
         batch_size=8,
         collate_fn=DataCollator(
             "Qwen/Qwen2.5-VL-3B-Instruct", max_token_len=all_config["max_length"]
@@ -353,29 +320,3 @@ if __name__ == "__main__":
 
     print(f"Total input tokens: {total_input_tokens}")
     print(f"Total label tokens: {total_label_tokens}")
-
-    # print(next(iter(dataloader))['input_ids'].shape)
-
-    # from tqdm import tqdm
-
-    # for sample in tqdm(iter(dataloader), total=len(dataset)):
-
-    #     print(sample['input_ids'].shape)
-    #     print(sample['attention_mask'].shape)
-    #     print(sample['labels'].shape)
-    #     print(torch.sum(sample['attention_mask']))
-
-    #     check_tokens_and_labels(sample['input_ids'], sample['labels'])
-    #     print("====================================")
-
-    # print(f"Dataset samples: {dataset[0].user_messages}")
-
-    # from transformers import AutoProcessor
-
-    # processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-3B-Instruct")
-    # text = processor.apply_chat_template(
-    #     [dataset[0].user_messages],  # Wrap in list as expected by the template
-    #     tokenize=False,  # Keep as text, don't tokenize yet
-    #     add_generation_prompt=True,  # Add generation tokens depending on the model
-    # )
-    # print(text)
