@@ -1,10 +1,12 @@
 import torch
 import numpy as np
 import json
+import os
+import random
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional
-from datasets import Dataset, load_from_disk
+from datasets import Dataset, load_from_disk, concatenate_datasets
 from concurrent.futures import ThreadPoolExecutor
 from transformers import AutoProcessor
 from torch.nn.utils.rnn import pad_sequence
@@ -56,6 +58,7 @@ def initialize_dataset(
     json_dir: Path, pdf_dir: Path, max_workers: Optional[int] = None
 ):
     json_files = list(json_dir.glob("*.json"))
+    random.shuffle(json_files)
 
     def check_pair(json_file):
         pdf_file = pdf_dir / f"{json_file.stem}.pdf"
@@ -69,7 +72,7 @@ def initialize_dataset(
         return None
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
-        results = list(filter(None, ex.map(check_pair, json_files)))
+        results = list(filter(None, ex.map(check_pair, json_files[:100000])))
     return results
 
 
@@ -145,17 +148,21 @@ class LocalDataset:
                 sample = SingleDatapoint(
                     pdf_path=Path(example[0]), json_path=Path(example[1])
                 )
-                for step in self.pipeline:
-                    sample = step(sample)
+                try:
+                    for step in self.pipeline:
+                        sample = step(sample)
 
-                if sample.model_inputs is None:
+                    if sample.model_inputs is None:
+                        continue
+
+                    input_ids_list.append(sample.model_inputs["input_ids"])
+                    attention_masks_list.append(sample.model_inputs["attention_mask"])
+                    labels_list.append(sample.model_inputs["labels"])
+                    pixel_values_list.append(sample.model_inputs["pixel_values"])
+                    image_grid_thw_list.append(sample.model_inputs["image_grid_thw"])
+                except Exception as e:
+                    print(e)
                     continue
-
-                input_ids_list.append(sample.model_inputs["input_ids"])
-                attention_masks_list.append(sample.model_inputs["attention_mask"])
-                labels_list.append(sample.model_inputs["labels"])
-                pixel_values_list.append(sample.model_inputs["pixel_values"])
-                image_grid_thw_list.append(sample.model_inputs["image_grid_thw"])
 
             examples["input_ids"] = input_ids_list
             examples["attention_mask"] = attention_masks_list
@@ -165,18 +172,40 @@ class LocalDataset:
 
             return examples
 
-        self.dataset = self.raw_dataset.map(
-            full_pipeline,
-            desc="Applying full Karanta pipeline",
-            num_proc=4,  # can parallelize if pipeline steps are stateless per sample
-            remove_columns=self.raw_dataset.column_names,
-            batched=True,
-            batch_size=8,
-            cache_file_name=str(self.cache_dir / "hf_cache_temp.arrow"),
-        )
+        # === Split and process in chunks of 50k ===
+        chunk_size = 50_000
+        total_samples = len(self.raw_dataset)
+        num_chunks = (total_samples + chunk_size - 1) // chunk_size
+
+        processed_datasets = []
+
+        for i in range(num_chunks):
+            start = i * chunk_size
+            end = min((i + 1) * chunk_size, total_samples)
+            print(f"🚀 Processing chunk {i + 1}/{num_chunks}: samples {start}–{end}")
+
+            subset = self.raw_dataset.select(range(start, end))
+            processed_chunk = subset.map(
+                full_pipeline,
+                desc=f"Applying full Karanta pipeline [chunk {i+1}]",
+                num_proc=48,
+                remove_columns=self.raw_dataset.column_names,
+                batched=True,
+                batch_size=4,
+                cache_file_name=str(self.cache_dir / f"hf_cache_chunk_{i+1}.arrow"),
+            )
+
+            processed_datasets.append(processed_chunk)
+
+            if i == 1:
+                break
+
+        # === Concatenate all processed chunks ===
+        print("🧩 Concatenating all processed chunks...")
+        self.dataset = concatenate_datasets(processed_datasets)
 
         # === Persist Arrow dataset ===
-        self.dataset.save_to_disk(str(self.cache_path))
+        self.dataset.save_to_disk(str(self.cache_path),num_proc=32)
 
     def _initialize_pipeline_steps(self, pipeline_config: List[Dict]):
         steps = []
@@ -285,10 +314,10 @@ class DataCollator:
 
 if __name__ == "__main__":
     all_config = load_yaml_config(
-        "configs/training/ocr/karanta_set_qwen_2_5_3B_vl_all_linear_no_base_text.yaml"
+        "configs/training/ocr/karanta_set_qwen_3_4B_vl_all_linear_no_base_text.yaml"
     )
     # print(all_config)
-    config = all_config["dataset_train"][2]
+    config = all_config["dataset_train"][0]
     pipeline = config["pipeline"]
 
     print(pipeline)

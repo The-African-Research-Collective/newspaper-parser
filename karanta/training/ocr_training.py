@@ -30,6 +30,7 @@ from transformers import (
     BitsAndBytesConfig,
     Qwen2_5_VLForConditionalGeneration,
     Qwen2VLForConditionalGeneration,
+    Qwen3VLForConditionalGeneration,
     get_scheduler,
 )
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
@@ -154,7 +155,6 @@ def main(args: ArgumentParserPlus):
         deepspeed_config = {
             "bf16": {"enabled": "auto"},
             "offload_param": {"device": "cpu", "pin_memory": True},
-            "offload_optimizer": {"device": "cpu", "pin_memory": True},
             "zero_optimization": {
                 "stage": 2,
                 "overlap_comm": True,
@@ -180,7 +180,6 @@ def main(args: ArgumentParserPlus):
             zero_stage=2,
             gradient_accumulation_steps=exp_args.gradient_accumulation_steps,
             gradient_clipping="auto",
-            offload_optimizer_device="cpu",
             offload_param_device="cpu",
         )
 
@@ -263,7 +262,7 @@ def main(args: ArgumentParserPlus):
         train_dataset = train_dataset.shuffle(seed=exp_args.seed)
 
         if not data_args.dataset_eval:
-            train_dataset, eval_dataset = random_split(train_dataset, [0.99, 0.01])
+            train_dataset, eval_dataset = random_split(train_dataset, [0.999, 0.001])
             eval_dl = DataLoader(
                 eval_dataset,
                 collate_fn=data_collator,
@@ -304,6 +303,7 @@ def main(args: ArgumentParserPlus):
         batch_size=exp_args.per_device_train_batch_size,
         num_workers=data_args.dataloader_num_workers,
         drop_last=True,
+        pin_memory=True
     )
     accelerator.wait_for_everyone()
 
@@ -331,6 +331,8 @@ def main(args: ArgumentParserPlus):
             model_class = Qwen2_5_VLForConditionalGeneration
         elif "Qwen2-VL" in model_args.model_name_or_path:
             model_class = Qwen2VLForConditionalGeneration
+        elif "Qwen3-VL" in model_args.model_name_or_path:
+            model_class = Qwen3VLForConditionalGeneration
 
         if model_args.use_qlora:
             quantization_config = BitsAndBytesConfig(
@@ -620,12 +622,12 @@ def main(args: ArgumentParserPlus):
         wandb.watch(model, log="all", log_freq=exp_args.logging_steps)
 
     # Evaluate before training
-    if accelerator.is_main_process:
-        eval_metrics = evaluate_model(
-            model, eval_dataloaders, accelerator, is_profile=exp_args.is_profile, cm=cm
-        )
-        accelerator.log(eval_metrics, step=completed_steps)
-        logger.info(f"Evaluation results at step {completed_steps} is  {eval_metrics}")
+    # if accelerator.is_main_process:
+    #     eval_metrics = evaluate_model(
+    #         model, eval_dataloaders, accelerator, is_profile=exp_args.is_profile, cm=cm
+    #     )
+    #     accelerator.log(eval_metrics, step=completed_steps)
+    #     logger.info(f"Evaluation results at step {completed_steps} is  {eval_metrics}")
 
     accelerator.wait_for_everyone()
 

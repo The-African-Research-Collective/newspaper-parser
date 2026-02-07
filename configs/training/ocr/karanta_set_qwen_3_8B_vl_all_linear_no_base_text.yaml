@@ -1,5 +1,5 @@
 # Model Configuration
-model_name_or_path: &model_name "Qwen/Qwen2.5-VL-3B-Instruct"
+model_name_or_path: &model_name "Qwen/Qwen3-VL-8B-Instruct"
 model_revision: main
 
 # Dataset configuration
@@ -89,7 +89,7 @@ max_length: 8192
 data_cache_folder_name: processed_no_anchor_all_samples_8192
 
 # Experiment Configuration
-exp_name: karanta_set_qwen_2_5_3B_vl_all_samples_linear_no_base_text_bf16
+exp_name: karanta_set_qwen_3_8B_vl_all_samples_linear_no_base_text_bf16
 seed: 42
 report_to:
   - wandb
